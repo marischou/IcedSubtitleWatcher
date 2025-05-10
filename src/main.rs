@@ -131,7 +131,7 @@ impl IcedSubtitleWatcher {
 
                 self.playback_time += self.time_after.as_millis() - self.time_before.as_millis();
 
-                info!("Ticked!, should be {} right now.", self.playback_time);
+                // info!("Ticked!, should be {} right now.", self.playback_time);
                 self.time_before = self.time_after;
 
                 let secs = self.playback_time / 1000;
@@ -388,7 +388,7 @@ impl IcedSubtitleWatcher {
                         if sub_item.starts_with("<") {
                             let somn = sub_item.split_off(sub_item.find(">").unwrap() + 1);
                             let somn = somn.split_at(somn.find("<").unwrap()).0.to_string();
-                            println!("{}", &somn);
+                            // println!("{}", &somn);
                             somn
                         } else {
                             sub_item
