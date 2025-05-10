@@ -1,0 +1,13 @@
+[package]
+name = "iced-subtitle-watcher"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dafont = "0.1.1"
+iced = { version = "0.13.1", features = ["tokio"] }
+log = "0.4.27"
+rfd = "0.15.3"
+simple_logger = "5.0.0"
+subparse = "0.7.0"
+time = "0.3.41"
