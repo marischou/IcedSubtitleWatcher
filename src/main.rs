@@ -404,7 +404,8 @@ impl IcedSubtitleWatcher {
             .padding(15),
         )
         .into();
-        full_output.explain(Color::from_rgb(1.0, 0.0, 0.0))
+        //full_output.explain(Color::from_rgb(1.0, 0.0, 0.0))
+        full_output
     }
 
     fn subscription(&self) -> Subscription<Message> {
