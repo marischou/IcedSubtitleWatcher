@@ -7,7 +7,7 @@ use iced::{
     keyboard,
     widget::{
         Column, button, column, container, pick_list, rich_text, row, scrollable, span, text,
-        text_input,
+        text_input, tooltip,
     },
 };
 use subparse::get_subtitle_format;
@@ -49,6 +49,8 @@ enum Message {
     DecreaseFontSize,
     ThemeSelected(Theme),
     SubFontChanged(String),
+    ReverseBackPressed,
+    FastForwardPressed,
 }
 enum Tab {
     Main,
@@ -177,6 +179,20 @@ impl IcedSubtitleWatcher {
                 self.play = false;
                 Task::none()
             }
+            Message::FastForwardPressed => {
+                self.playback_time = self.playback_time.saturating_add(5000);
+                self.playback_time_str =
+                    Timing::from_u128_ms(self.playback_time + self.offset_time)
+                        .to_string_formatted();
+                Task::none()
+            }
+            Message::ReverseBackPressed => {
+                self.playback_time = self.playback_time.saturating_sub(5000);
+                self.playback_time_str =
+                    Timing::from_u128_ms(self.playback_time + self.offset_time)
+                        .to_string_formatted();
+                Task::none()
+            }
             Message::ResetTimeHeadPressed => {
                 self.playback_time = 0;
                 self.playback_time_str =
@@ -184,14 +200,14 @@ impl IcedSubtitleWatcher {
                 Task::none()
             }
             Message::IncreaseFontSize => {
-                self.font_size += 1;
+                self.font_size = self.font_size.saturating_add(1);
                 if self.font_size >= 100 {
                     self.font_size -= 1;
                 }
                 Task::none()
             }
             Message::DecreaseFontSize => {
-                self.font_size -= 1;
+                self.font_size = self.font_size.saturating_sub(1);
                 if self.font_size <= 0 {
                     self.font_size += 1;
                 }
@@ -273,8 +289,16 @@ impl IcedSubtitleWatcher {
 
     fn view(&self) -> Element<'_, Message> {
         let content_up = if !self.transparent {
-            let play_button = better_button("▷", 16, self.play, Message::PlayButtonPressed);
-            let pause_button = better_button("⏸", 16, !self.play, Message::PauseButtonPressed);
+            let play_button = tooltip(
+                better_button("▷", 16, self.play, Message::PlayButtonPressed),
+                "Play",
+                tooltip::Position::Bottom,
+            );
+            let pause_button = tooltip(
+                better_button("■", 16, !self.play, Message::PauseButtonPressed),
+                "Pause",
+                tooltip::Position::Bottom,
+            );
 
             let offset_input = text_input(&self.offset_str, &self.offset_str)
                 .on_input_maybe(match self.play {
@@ -290,25 +314,61 @@ impl IcedSubtitleWatcher {
                 })
                 .width(Length::Fixed(130.0));
 
-            let reset_button = better_button("⟲", 16, self.play, Message::ResetTimeHeadPressed);
+            let rr_button = tooltip(
+                button(text_size_ccff_container("<", 16))
+                    .on_press(Message::ReverseBackPressed)
+                    .width(Length::Fixed(35.0)),
+                "Reverse 5 seconds",
+                tooltip::Position::Bottom,
+            );
 
-            let settings_button = button(text_size_ccff_container("⚙", 16))
-                .width(Length::Fixed(50.0))
-                .style(|but_theme, but_status| match self.tab {
-                    Tab::Main => iced::widget::button::primary(but_theme, but_status),
-                    Tab::Settings => iced::widget::button::secondary(but_theme, but_status),
-                })
-                .on_press(Message::TabPressed);
+            let ff_button = tooltip(
+                button(text_size_ccff_container(">", 16))
+                    .on_press(Message::FastForwardPressed)
+                    .width(Length::Fixed(35.0)),
+                "Forward 5 seconds",
+                tooltip::Position::Bottom,
+            );
 
-            let file_picker = better_button("📂", 16, self.play, Message::LoadFileButtonPressed);
+            let reset_button = tooltip(
+                better_button("⟲", 16, self.play, Message::ResetTimeHeadPressed),
+                "Reset playback to start",
+                tooltip::Position::Bottom,
+            );
 
-            let increase_font = button(text_size_ccff_container("+", 16))
-                .on_press(Message::IncreaseFontSize)
-                .width(Length::Fixed(50.0));
+            let settings_button = tooltip(
+                button(text_size_ccff_container("⚙", 16))
+                    .width(Length::Fixed(35.0))
+                    .style(|but_theme, but_status| match self.tab {
+                        Tab::Main => iced::widget::button::primary(but_theme, but_status),
+                        Tab::Settings => iced::widget::button::secondary(but_theme, but_status),
+                    })
+                    .on_press(Message::TabPressed),
+                "Settings",
+                tooltip::Position::Bottom,
+            );
 
-            let decrease_font = button(text_size_ccff_container("-", 16))
-                .on_press(Message::DecreaseFontSize)
-                .width(Length::Fixed(50.0));
+            let file_picker = tooltip(
+                better_button("🗁", 16, self.play, Message::LoadFileButtonPressed),
+                "Open subtitle file",
+                tooltip::Position::Bottom,
+            );
+
+            let increase_font = tooltip(
+                button(text_size_ccff_container("+", 16))
+                    .on_press(Message::IncreaseFontSize)
+                    .width(Length::Fixed(35.0)),
+                "Increase font size",
+                tooltip::Position::Bottom,
+            );
+
+            let decrease_font = tooltip(
+                button(text_size_ccff_container("-", 16))
+                    .on_press(Message::DecreaseFontSize)
+                    .width(Length::Fixed(35.0)),
+                "Decrease font size",
+                tooltip::Position::Bottom,
+            );
 
             container(
                 row![
@@ -319,11 +379,13 @@ impl IcedSubtitleWatcher {
                         offset_input
                     ]
                     .align_y(Alignment::Center),
+                    rr_button,
                     row![
                         text_size_ccff_container("Seek: ", 16).width(Length::Fixed(60.0)),
                         player_input
                     ]
                     .align_y(Alignment::Center),
+                    ff_button,
                     reset_button,
                     file_picker,
                     settings_button,
@@ -334,7 +396,7 @@ impl IcedSubtitleWatcher {
                         .align_y(Alignment::Center),
                     decrease_font,
                 ]
-                .spacing(20),
+                .spacing(15),
             )
             .align_x(Alignment::Center)
             .width(Length::Fill)
@@ -564,9 +626,9 @@ fn better_button<'a, T: Into<String> + iced::widget::text::IntoFragment<'a>>(
     size: u16,
     boolset: bool,
     message: Message,
-) -> Element<'a, Message> {
+) -> iced::widget::Button<'a, Message, Theme, iced::Renderer> {
     button(text_size_ccff_container(text_in, size))
-        .width(Length::Fixed(50.0))
+        .width(Length::Fixed(35.0))
         .on_press_maybe(match boolset {
             true => None,
             false => Some(message),
