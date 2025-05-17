@@ -10,20 +10,9 @@ use iced::{
         text_input,
     },
 };
-use log::{info, warn};
 use subparse::get_subtitle_format;
 
 fn main() -> iced::Result {
-    simple_logger::SimpleLogger::new()
-        .with_level(log::LevelFilter::Off)
-        .with_module_level("iced_subtitle_watcher", log::LevelFilter::Info)
-        .with_colors(true)
-        .with_timestamp_format(time::macros::format_description!(
-            "[year]-[month]-[day] [hour]:[minute]:[second]"
-        ))
-        .init()
-        .unwrap();
-
     iced::application(
         IcedSubtitleWatcher::title(),
         IcedSubtitleWatcher::update,
@@ -43,7 +32,6 @@ fn main() -> iced::Result {
     })
     .run_with(IcedSubtitleWatcher::new)
 }
-// Wish I knew how to deal with transparency and window grabbing better
 
 #[derive(Debug, Clone)]
 enum Message {
@@ -56,12 +44,12 @@ enum Message {
     LoadFileButtonPressed,
     TabPressed,
     ToggleTransparency,
+    KeySpacePressed,
     IncreaseFontSize,
     DecreaseFontSize,
     ThemeSelected(Theme),
     SubFontChanged(String),
 }
-
 enum Tab {
     Main,
     Settings,
@@ -76,7 +64,7 @@ struct IcedSubtitleWatcher {
     time_head: Instant,
     time_before: Duration,
     time_after: Duration,
-    current_subtitles: Vec<subparse::SubtitleEntry>,
+    active_subtitles: Vec<Subtitle>,
     tab: Tab,
     transparent: bool,
     font_size: u16,
@@ -108,7 +96,7 @@ impl IcedSubtitleWatcher {
                 time_head: Instant::now(),
                 time_before: Duration::from_micros(0),
                 time_after: Duration::from_secs(0),
-                current_subtitles: Vec::new(),
+                active_subtitles: Vec::new(),
                 tab: Tab::Main,
                 transparent: false,
                 font_size: 48,
@@ -131,18 +119,11 @@ impl IcedSubtitleWatcher {
 
                 self.playback_time += self.time_after.as_millis() - self.time_before.as_millis();
 
-                // info!("Ticked!, should be {} right now.", self.playback_time);
                 self.time_before = self.time_after;
 
-                let secs = self.playback_time / 1000;
-                let time_ms = self.playback_time % 1000;
-                let time_s = secs % 60;
-                let time_m = (secs / 60) % 60;
-                let time_h = secs / (60 * 60);
-
-                let fmt_time = format!("{:02}:{:02}:{:02}:{:03}", time_h, time_m, time_s, time_ms);
-
-                self.playback_time_str = fmt_time;
+                self.playback_time_str =
+                    Timing::from_u128_ms(self.playback_time + self.offset_time)
+                        .to_string_formatted();
                 Task::none()
             }
             Message::TabPressed => {
@@ -156,12 +137,34 @@ impl IcedSubtitleWatcher {
                 self.transparent = !self.transparent;
                 Task::none()
             }
+            Message::KeySpacePressed => {
+                if self.play {
+                    Task::done(()).map(|_| Message::PauseButtonPressed)
+                } else {
+                    Task::done(()).map(|_| Message::PlayButtonPressed)
+                }
+            }
             Message::ThemeSelected(selection) => {
                 self.active_theme = selection;
                 Task::none()
             }
             Message::SubFontChanged(font_string) => {
                 self.active_sub_font = font_string;
+                self.active_subtitles = self
+                    .active_subtitles
+                    .iter_mut()
+                    .map(|item| Subtitle {
+                        start_time_ms: item.start_time_ms,
+                        end_time_ms: item.end_time_ms,
+                        text: item.text.clone(),
+                        font: Font {
+                            family: iced::font::Family::Name(Box::leak(
+                                self.active_sub_font.clone().into_boxed_str(),
+                            )),
+                            ..Default::default()
+                        },
+                    })
+                    .collect::<Vec<Subtitle>>();
                 Task::none()
             }
             Message::PlayButtonPressed => {
@@ -176,7 +179,8 @@ impl IcedSubtitleWatcher {
             }
             Message::ResetTimeHeadPressed => {
                 self.playback_time = 0;
-                self.playback_time_str = String::from("00:00:00:000");
+                self.playback_time_str =
+                    Timing::from_u128_ms(self.offset_time).to_string_formatted();
                 Task::none()
             }
             Message::IncreaseFontSize => {
@@ -194,87 +198,20 @@ impl IcedSubtitleWatcher {
                 Task::none()
             }
             Message::OffsetEdited(time_content) => {
-                let time_vec = time_content
-                    .split(":")
-                    .map(|item| item.to_string())
-                    .collect::<Vec<String>>()
-                    .clone();
-                if time_vec.len() != 4 {
-                    return Task::none();
+                if let Some(ok_time) = Timing::from_string_fmtd(time_content.clone()) {
+                    self.offset_time = ok_time.to_u128_ms();
+                    self.offset_str = time_content;
+                    self.playback_time_str =
+                        Timing::from_u128_ms(self.playback_time + self.offset_time)
+                            .to_string_formatted();
                 }
-
-                let mut some = time_vec.iter();
-
-                let time_hh = some.next().unwrap().parse::<u128>();
-                let time_mm = some.next().unwrap().parse::<u128>();
-                let time_ss = some.next().unwrap().parse::<u128>();
-                let time_ms = some.next().unwrap().parse::<u128>();
-
-                if let Err(_) = time_hh {
-                    return Task::none();
-                }
-                if let Err(_) = time_mm {
-                    return Task::none();
-                }
-                if let Err(_) = time_ss {
-                    return Task::none();
-                }
-                if let Err(_) = time_ms {
-                    return Task::none();
-                }
-
-                self.offset_str = time_content;
-                self.offset_time = time_hh.unwrap() * 3600000
-                    + time_mm.unwrap() * 60000
-                    + time_ss.unwrap() * 1000
-                    + time_ms.unwrap();
-
                 Task::none()
             }
             Message::PlaybackTimeEdited(time_content) => {
-                let time_vec = time_content
-                    .split(":")
-                    .map(|item| item.to_string())
-                    .collect::<Vec<String>>()
-                    .clone();
-                if time_vec.len() != 4 {
-                    return Task::none();
+                if let Some(ok_time) = Timing::from_string_fmtd(time_content.clone()) {
+                    self.playback_time = ok_time.to_u128_ms();
+                    self.playback_time_str = time_content;
                 }
-
-                let mut some = time_vec.iter();
-
-                let time_hh = some.next().unwrap().parse::<u128>();
-                let time_mm = some.next().unwrap().parse::<u128>();
-                let time_ss = some.next().unwrap().parse::<u128>();
-                let time_ms = some.next().unwrap().parse::<u128>();
-
-                if let Err(_) = time_hh {
-                    return Task::none();
-                }
-                if let Err(_) = time_mm {
-                    return Task::none();
-                }
-                if let Err(_) = time_ss {
-                    return Task::none();
-                }
-                if let Err(_) = time_ms {
-                    return Task::none();
-                }
-
-                self.playback_time = (time_hh.unwrap() * 3600000
-                    + time_mm.unwrap() * 60000
-                    + time_ss.unwrap() * 1000
-                    + time_ms.unwrap())
-                    - self.offset_time;
-
-                let secs = self.playback_time / 1000;
-                let time_ms = self.playback_time % 1000;
-                let time_s = secs % 60;
-                let time_m = (secs / 60) % 60;
-                let time_h = secs / (60 * 60);
-                let fmt_time = format!("{:02}:{:02}:{:02}:{:03}", time_h, time_m, time_s, time_ms);
-
-                self.playback_time_str = fmt_time;
                 Task::none()
             }
             Message::LoadFileButtonPressed => {
@@ -284,7 +221,7 @@ impl IcedSubtitleWatcher {
                     .pick_file();
 
                 if let None = picked_file {
-                    warn!("Unable to open file! ");
+                    println!("Failed to pick file!");
                 } else {
                     let picked_file = picked_file.unwrap().clone();
                     let data = std::fs::read_to_string(picked_file.clone());
@@ -297,7 +234,37 @@ impl IcedSubtitleWatcher {
                     let format =
                         get_subtitle_format(picked_file.extension(), data.as_bytes()).unwrap();
                     let subtitle_file = subparse::parse_str(format, &data, 25.0).unwrap();
-                    self.current_subtitles = subtitle_file.get_subtitle_entries().unwrap();
+
+                    self.active_subtitles = subtitle_file
+                        .get_subtitle_entries()
+                        .unwrap()
+                        .iter()
+                        .map(|subtitle_item| {
+                            let sub_content_option = subtitle_item.line.clone();
+                            let sanitised_sub = if let Some(sub_content) = sub_content_option {
+                                // Strip <> and {}
+                                // Future: Get font and header data, italics maybe from the stripped data.
+                                let mut subtitle = strip_tags(&sub_content, '<', '>');
+                                subtitle = strip_tags(&subtitle, '{', '}');
+                                subtitle = subtitle.replace("\\N", "\n");
+                                subtitle
+                            } else {
+                                "... [No Sub]".to_string()
+                            };
+
+                            Subtitle {
+                                start_time_ms: subtitle_item.timespan.start.msecs() as u128,
+                                end_time_ms: subtitle_item.timespan.end.msecs() as u128,
+                                text: sanitised_sub,
+                                font: Font {
+                                    family: iced::font::Family::Name(Box::leak(
+                                        self.active_sub_font.clone().into_boxed_str(),
+                                    )),
+                                    ..Default::default()
+                                },
+                            }
+                        })
+                        .collect::<Vec<Subtitle>>();
                 }
                 Task::none()
             }
@@ -305,115 +272,97 @@ impl IcedSubtitleWatcher {
     }
 
     fn view(&self) -> Element<'_, Message> {
-        let play_button = better_button("▷", 16, self.play, Message::PlayButtonPressed);
-        let pause_button = better_button("⏸", 16, !self.play, Message::PauseButtonPressed);
+        let content_up = if !self.transparent {
+            let play_button = better_button("▷", 16, self.play, Message::PlayButtonPressed);
+            let pause_button = better_button("⏸", 16, !self.play, Message::PauseButtonPressed);
 
-        let offset_input = text_input(&self.offset_str, &self.offset_str)
-            .on_input_maybe(match self.play {
-                true => None,
-                false => Some(Message::OffsetEdited),
-            })
-            .width(Length::Fixed(130.0));
+            let offset_input = text_input(&self.offset_str, &self.offset_str)
+                .on_input_maybe(match self.play {
+                    true => None,
+                    false => Some(Message::OffsetEdited),
+                })
+                .width(Length::Fixed(130.0));
 
-        let added = self.offset_time + self.playback_time;
+            let player_input = text_input(&self.playback_time_str, &self.playback_time_str)
+                .on_input_maybe(match self.play {
+                    true => None,
+                    false => Some(Message::PlaybackTimeEdited),
+                })
+                .width(Length::Fixed(130.0));
 
-        let secs = added / 1000;
-        let time_ms = added % 1000;
-        let time_s = secs % 60;
-        let time_m = (secs / 60) % 60;
-        let time_h = secs / (60 * 60);
-        let fmt_time = format!("{:02}:{:02}:{:02}:{:03}", time_h, time_m, time_s, time_ms);
+            let reset_button = better_button("⟲", 16, self.play, Message::ResetTimeHeadPressed);
 
-        let player_input = text_input(&fmt_time, &fmt_time)
-            .on_input_maybe(match self.play {
-                true => None,
-                false => Some(Message::PlaybackTimeEdited),
-            })
-            .width(Length::Fixed(130.0));
+            let settings_button = button(text_size_ccff_container("⚙", 16))
+                .width(Length::Fixed(50.0))
+                .style(|but_theme, but_status| match self.tab {
+                    Tab::Main => iced::widget::button::primary(but_theme, but_status),
+                    Tab::Settings => iced::widget::button::secondary(but_theme, but_status),
+                })
+                .on_press(Message::TabPressed);
 
-        let reset_button = better_button("⟲", 16, self.play, Message::ResetTimeHeadPressed);
+            let file_picker = better_button("📂", 16, self.play, Message::LoadFileButtonPressed);
 
-        let settings_button = button(text_size_ccff_container("⚙", 16))
-            .width(Length::Fixed(50.0))
-            .on_press(Message::TabPressed);
+            let increase_font = button(text_size_ccff_container("+", 16))
+                .on_press(Message::IncreaseFontSize)
+                .width(Length::Fixed(50.0));
 
-        let file_picker = better_button("📂", 16, self.play, Message::LoadFileButtonPressed);
+            let decrease_font = button(text_size_ccff_container("-", 16))
+                .on_press(Message::DecreaseFontSize)
+                .width(Length::Fixed(50.0));
 
-        let increase_font = button(text_size_ccff_container("+", 16))
-            .on_press(Message::IncreaseFontSize)
-            .width(Length::Fixed(50.0));
-
-        let decrease_font = button(text_size_ccff_container("-", 16))
-            .on_press(Message::DecreaseFontSize)
-            .width(Length::Fixed(50.0));
-
-        let content_up = container(
-            row![
-                play_button,
-                pause_button,
+            container(
                 row![
-                    text_size_ccff_container("Offset: ", 16).width(Length::Fixed(60.0)),
-                    offset_input
+                    play_button,
+                    pause_button,
+                    row![
+                        text_size_ccff_container("Offset: ", 16).width(Length::Fixed(60.0)),
+                        offset_input
+                    ]
+                    .align_y(Alignment::Center),
+                    row![
+                        text_size_ccff_container("Seek: ", 16).width(Length::Fixed(60.0)),
+                        player_input
+                    ]
+                    .align_y(Alignment::Center),
+                    reset_button,
+                    file_picker,
+                    settings_button,
+                    increase_font,
+                    text_size_ccff_container(self.font_size.to_string(), 16)
+                        .width(20.0)
+                        .height(Length::Fill)
+                        .align_y(Alignment::Center),
+                    decrease_font,
                 ]
-                .align_y(Alignment::Center),
-                row![
-                    text_size_ccff_container("Seek: ", 16).width(Length::Fixed(60.0)),
-                    player_input
-                ]
-                .align_y(Alignment::Center),
-                reset_button,
-                file_picker,
-                settings_button,
-                increase_font,
-                decrease_font,
-            ]
-            .spacing(20),
-        )
-        .align_x(Alignment::Center)
-        .width(Length::Fill);
+                .spacing(20),
+            )
+            .align_x(Alignment::Center)
+            .width(Length::Fill)
+            .height(Length::Fixed(30.0))
+        } else {
+            container("")
+        };
 
         let output: Element<'_, Message> = match self.tab {
             Tab::Main => {
-                let the_subs = self
-                    .current_subtitles
+                // New
+                let subs_to_diplay = self
+                    .active_subtitles
                     .iter()
-                    .filter(|subtitle_item| {
-                        (self.playback_time)
-                            >= subtitle_item.timespan.start.msecs().try_into().unwrap()
-                            && (self.playback_time)
-                                <= subtitle_item.timespan.end.msecs().try_into().unwrap()
+                    .filter(|subtitle| {
+                        (self.playback_time >= subtitle.start_time_ms)
+                            && (self.playback_time <= subtitle.end_time_ms)
                     })
-                    .map(|sub_item| sub_item.line.clone().unwrap_or("...".to_string()))
-                    .map(|mut sub_item| {
-                        if sub_item.starts_with("<") {
-                            let somn = sub_item.split_off(sub_item.find(">").unwrap() + 1);
-                            let somn = somn.split_at(somn.find("<").unwrap()).0.to_string();
-                            // println!("{}", &somn);
-                            somn
-                        } else {
-                            sub_item
-                        }
-                    })
-                    // Guys please strip metadata yourself yo
-                    .collect::<Vec<String>>();
+                    .collect::<Vec<&Subtitle>>();
 
-                let font_param = Font {
-                    family: iced::font::Family::Name(Box::leak(
-                        self.active_sub_font.clone().into_boxed_str(),
-                    )),
-                    ..Default::default()
-                };
+                let sub_content = subs_to_diplay.iter().fold(
+                    Column::new().spacing(10).align_x(Alignment::Center),
+                    |mut accu, sub| {
+                        accu = accu.push(sub.view(self.font_size));
+                        accu
+                    },
+                );
 
-                let mut sub_content = Column::new().spacing(10).align_x(Alignment::Center);
-                for sub_i in the_subs {
-                    for subsub in sub_i.split("\\N").into_iter() {
-                        sub_content = sub_content.push(
-                            rich_text![span(subsub.to_string())]
-                                .font(font_param)
-                                .size(self.font_size),
-                        );
-                    }
-                }
                 sub_content.into()
             }
             Tab::Settings => container(scrollable(
@@ -442,7 +391,7 @@ impl IcedSubtitleWatcher {
             .into(),
         };
 
-        container(
+        let full_output: Element<'_, Message> = container(
             column![
                 content_up,
                 container(output)
@@ -454,19 +403,19 @@ impl IcedSubtitleWatcher {
             .spacing(10)
             .padding(15),
         )
-        .into()
+        .into();
+        full_output.explain(Color::from_rgb(1.0, 0.0, 0.0))
     }
 
     fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![];
-        use keyboard::key;
+        use keyboard::Key::Named;
+        use keyboard::key::Named as KeyName;
 
-        subs.push(keyboard::on_key_press(|key, _modifiers| {
-            if let keyboard::Key::Named(key::Named::Escape) = key {
-                Some(Message::ToggleTransparency)
-            } else {
-                None
-            }
+        subs.push(keyboard::on_key_press(|key, _modifiers| match key {
+            Named(KeyName::Escape) => Some(Message::ToggleTransparency),
+            Named(KeyName::Space) => Some(Message::KeySpacePressed),
+            _ => None,
         }));
 
         subs.push(if self.play {
@@ -477,6 +426,136 @@ impl IcedSubtitleWatcher {
 
         Subscription::batch(subs)
     }
+}
+
+struct Subtitle {
+    start_time_ms: u128,
+    end_time_ms: u128,
+    text: String,
+    font: Font,
+}
+
+impl Subtitle {
+    fn _new<T: Into<String>>(start_t: u128, end_t: u128, text: T, font: Font) -> Self {
+        Subtitle {
+            start_time_ms: start_t,
+            end_time_ms: end_t,
+            text: text.into().clone(),
+            font: font,
+        }
+    }
+
+    fn view<'a>(
+        &self,
+        font_size: u16,
+    ) -> iced::widget::text::Rich<'a, Message, Theme, iced::Renderer> {
+        rich_text![span(self.text.clone())]
+            .size(font_size)
+            .font(self.font)
+    }
+}
+
+struct Timing {
+    hh: u128,
+    mm: u128,
+    ss: u128,
+    ms: u128,
+}
+
+impl Timing {
+    fn _from_string_ms(input: String) -> Option<Timing> {
+        if let Ok(valid_number) = input.parse::<u128>() {
+            let secs = valid_number / 1000;
+            let time_ms = valid_number % 1000;
+            let time_ss = secs % 60;
+            let time_mm = (secs / 60) % 60;
+            let time_hh = secs / (60 * 60);
+            return Some(Timing {
+                hh: time_hh,
+                mm: time_mm,
+                ss: time_ss,
+                ms: time_ms,
+            });
+        } else {
+            return None;
+        }
+    }
+    fn from_string_fmtd(input: String) -> Option<Timing> {
+        let iter_timing = input
+            .split(":")
+            .map(|item| item.to_string().parse::<u128>())
+            .filter(|item| item.is_ok())
+            .map(|item| item.unwrap())
+            .collect::<Vec<u128>>();
+
+        if iter_timing.len() != 4 {
+            return None;
+        }
+
+        let hh = iter_timing[0];
+        let mm = iter_timing[1];
+        let ss = iter_timing[2];
+        let ms = iter_timing[3];
+
+        if ms >= 1000 {
+            return None;
+        } else if ss >= 60 {
+            return None;
+        } else if mm >= 60 {
+            return None;
+        }
+
+        Some(Timing {
+            hh: hh,
+            mm: mm,
+            ss: ss,
+            ms: ms,
+        })
+    }
+    fn from_u128_ms(input: u128) -> Timing {
+        let secs = input / 1000;
+        let time_ms = input % 1000;
+        let time_ss = secs % 60;
+        let time_mm = (secs / 60) % 60;
+        let time_hh = secs / (60 * 60);
+        Timing {
+            hh: time_hh,
+            mm: time_mm,
+            ss: time_ss,
+            ms: time_ms,
+        }
+    }
+    fn to_string_formatted(&self) -> String {
+        format!(
+            "{:02}:{:02}:{:02}:{:03}",
+            self.hh, self.mm, self.ss, self.ms
+        )
+    }
+    fn to_u128_ms(&self) -> u128 {
+        self.hh * 3600000 + self.mm * 60000 + self.ss * 1000 + self.ms
+    }
+}
+
+fn strip_tags(input: &str, delim_start: char, delim_end: char) -> String {
+    let mut output = String::new();
+    let mut count: i64 = 0;
+    for c in input.chars() {
+        if c == delim_start {
+            count += 1;
+            continue;
+        } else if c == delim_end {
+            count -= 1;
+            continue;
+        }
+        if count == 0 {
+            if c == '\n' {
+                output.push(' ');
+            } else {
+                output.push(c);
+            }
+        }
+    }
+    output
 }
 
 fn better_button<'a, T: Into<String> + iced::widget::text::IntoFragment<'a>>(
